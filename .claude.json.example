@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "clangd": {
+      "command": "clangd-mcp-server",
+      "env": {
+        "PROJECT_ROOT": "/path/to/your/cpp/project",
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}
