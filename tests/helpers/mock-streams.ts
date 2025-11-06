@@ -23,6 +23,11 @@ export class MockWritableStream extends Writable {
   clear(): void {
     this.written = [];
   }
+
+  cleanup(): void {
+    this.removeAllListeners();
+    this.destroy();
+  }
 }
 
 /**
@@ -39,6 +44,11 @@ export class MockReadableStream extends Readable {
 
   endStream(): void {
     this.push(null);
+  }
+
+  cleanup(): void {
+    this.removeAllListeners();
+    this.destroy();
   }
 }
 

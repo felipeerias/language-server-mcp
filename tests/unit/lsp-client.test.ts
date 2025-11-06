@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { LSPClient } from '../../src/lsp-client.js';
 import { LSPError } from '../../src/utils/errors.js';
 import {
@@ -21,6 +21,12 @@ describe('LSPClient', () => {
     stdin = new MockWritableStream();
     stdout = new MockReadableStream();
     client = new LSPClient(stdin, stdout);
+  });
+
+  afterEach(() => {
+    client.close();
+    stdin.cleanup();
+    stdout.cleanup();
   });
 
   describe('request', () => {

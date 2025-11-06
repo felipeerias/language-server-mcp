@@ -24,6 +24,9 @@ export class ClangdManager {
   private shuttingDown: boolean = false;
   private restartCount: number = 0;
   private readonly maxRestarts: number = 3;
+  private isRestarting: boolean = false;
+  private lastSuccessfulStart: number = 0;
+  private readonly stableOperationPeriodMs: number = 60000; // 1 minute
 
   constructor(config: ClangdConfig) {
     this.config = config;
@@ -42,6 +45,18 @@ export class ClangdManager {
       await this.spawnClangd();
       await this.initialize();
       this.initialized = true;
+
+      // Reset restart count if we've had a stable operation period
+      if (this.restartCount > 0) {
+        const timeSinceLastStart = Date.now() - this.lastSuccessfulStart;
+        if (timeSinceLastStart >= this.stableOperationPeriodMs) {
+          logger.info('Stable operation detected, resetting restart counter');
+          this.restartCount = 0;
+        }
+      }
+
+      this.lastSuccessfulStart = Date.now();
+
       logger.info('Clangd started and initialized successfully');
     } catch (error) {
       logger.error('Failed to start clangd:', error);
@@ -162,15 +177,35 @@ export class ClangdManager {
     this.lspClient = undefined;
     this.initialized = false;
 
+    // Prevent concurrent restart attempts
+    if (this.isRestarting) {
+      logger.warn('Restart already in progress, ignoring duplicate crash');
+      return;
+    }
+
+    // Reset restart count if we've had stable operation
+    const timeSinceLastStart = Date.now() - this.lastSuccessfulStart;
+    if (timeSinceLastStart >= this.stableOperationPeriodMs && this.restartCount > 0) {
+      logger.info('Stable operation period elapsed, resetting restart counter');
+      this.restartCount = 0;
+    }
+
     // Attempt restart if under limit
     if (this.restartCount < this.maxRestarts) {
       this.restartCount++;
+      this.isRestarting = true;
       logger.warn(`Attempting to restart clangd (attempt ${this.restartCount}/${this.maxRestarts})`);
 
       setTimeout(() => {
-        this.start().catch((error) => {
-          logger.error('Failed to restart clangd:', error);
-        });
+        this.start()
+          .then(() => {
+            this.isRestarting = false;
+            logger.info('Clangd restarted successfully');
+          })
+          .catch((error) => {
+            this.isRestarting = false;
+            logger.error('Failed to restart clangd:', error);
+          });
       }, 1000 * this.restartCount); // Exponential backoff
     } else {
       logger.error('Max restart attempts reached, giving up');
@@ -228,6 +263,11 @@ export class ClangdManager {
 
     this.process = undefined;
     this.initialized = false;
+
+    // Reset flags only if not shutting down (cleanup during restart vs shutdown)
+    if (!this.shuttingDown) {
+      this.isRestarting = false;
+    }
   }
 
   /**

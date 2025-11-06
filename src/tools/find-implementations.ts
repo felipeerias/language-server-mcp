@@ -6,19 +6,7 @@ import { LSPClient } from '../lsp-client.js';
 import { FileTracker } from '../file-tracker.js';
 import { uriToPath } from '../utils/uri.js';
 import { withRetry } from '../utils/errors.js';
-
-interface Position {
-  line: number;
-  character: number;
-}
-
-interface Location {
-  uri: string;
-  range: {
-    start: Position;
-    end: Position;
-  };
-}
+import { Location, normalizeLocationResult } from '../utils/lsp-types.js';
 
 export async function findImplementations(
   lspClient: LSPClient,
@@ -60,19 +48,4 @@ export async function findImplementations(
     count: formattedLocations.length,
     locations: formattedLocations
   }, null, 2);
-}
-
-/**
- * Normalize LSP location result which can be Location | Location[] | null
- */
-function normalizeLocationResult(result: any): Location[] {
-  if (!result) {
-    return [];
-  }
-
-  if (Array.isArray(result)) {
-    return result;
-  }
-
-  return [result];
 }

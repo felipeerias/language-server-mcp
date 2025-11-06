@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { logger } from './utils/logger.js';
 
 export interface ClangdConfig {
@@ -86,6 +86,58 @@ function findCompileCommands(projectRoot: string): string | undefined {
 }
 
 /**
+ * Parse shell arguments handling quotes and escapes
+ */
+function parseShellArgs(input: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && (inDoubleQuote || !inSingleQuote)) {
+      escaped = true;
+      continue;
+    }
+
+    if (char === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
+
+    if (char === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+
+    if (char === ' ' && !inSingleQuote && !inDoubleQuote) {
+      if (current.length > 0) {
+        args.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.length > 0) {
+    args.push(current);
+  }
+
+  return args;
+}
+
+/**
  * Generate appropriate clangd arguments based on project type
  */
 function generateClangdArgs(isChromiumProject: boolean, compileCommandsPath?: string): string[] {
@@ -93,12 +145,13 @@ function generateClangdArgs(isChromiumProject: boolean, compileCommandsPath?: st
 
   // Parse additional args from environment
   if (process.env.CLANGD_ARGS) {
-    args.push(...process.env.CLANGD_ARGS.split(' ').filter(arg => arg.length > 0));
+    args.push(...parseShellArgs(process.env.CLANGD_ARGS));
   }
 
   // Add compile commands path if found
   if (compileCommandsPath) {
-    args.push(`--compile-commands-dir=${compileCommandsPath.replace('/compile_commands.json', '')}`);
+    // Use dirname to properly extract directory on all platforms
+    args.push(`--compile-commands-dir=${dirname(compileCommandsPath)}`);
   }
 
   // Disable background indexing by default for MCP server use case

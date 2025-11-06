@@ -26,24 +26,96 @@ import { getDocumentSymbols } from './tools/document-symbols.js';
 // Global state
 let clangdManager: ClangdManager | null = null;
 let fileTracker: FileTracker | null = null;
+let initializationPromise: Promise<void> | null = null;
+let isShuttingDown: boolean = false;
+
+/**
+ * Validate MCP tool arguments
+ */
+function validateToolArgs(name: string, args: any): void {
+  if (!args || typeof args !== 'object') {
+    throw new Error('Invalid arguments: must be an object');
+  }
+
+  switch (name) {
+    case 'find_definition':
+    case 'find_references':
+    case 'get_hover':
+    case 'find_implementations':
+      if (typeof args.file_path !== 'string') {
+        throw new Error('Invalid file_path: must be a string');
+      }
+      if (typeof args.line !== 'number' || !Number.isInteger(args.line) || args.line < 0) {
+        throw new Error('Invalid line: must be a non-negative integer');
+      }
+      if (typeof args.column !== 'number' || !Number.isInteger(args.column) || args.column < 0) {
+        throw new Error('Invalid column: must be a non-negative integer');
+      }
+      if (name === 'find_references' && args.include_declaration !== undefined && typeof args.include_declaration !== 'boolean') {
+        throw new Error('Invalid include_declaration: must be a boolean');
+      }
+      break;
+
+    case 'workspace_symbol_search':
+      if (typeof args.query !== 'string') {
+        throw new Error('Invalid query: must be a string');
+      }
+      if (args.limit !== undefined && (typeof args.limit !== 'number' || !Number.isInteger(args.limit) || args.limit <= 0)) {
+        throw new Error('Invalid limit: must be a positive integer');
+      }
+      break;
+
+    case 'get_document_symbols':
+      if (typeof args.file_path !== 'string') {
+        throw new Error('Invalid file_path: must be a string');
+      }
+      break;
+
+    default:
+      // Unknown tool, will be caught by the switch below
+      break;
+  }
+}
 
 /**
  * Initialize clangd (lazy initialization on first query)
+ * Uses a lock to prevent concurrent initialization attempts
  */
 async function ensureClangdInitialized(): Promise<void> {
+  // Check if shutting down
+  if (isShuttingDown) {
+    throw new Error('Server is shutting down');
+  }
+
+  // Fast path: already initialized
   if (clangdManager && clangdManager.isReady()) {
     return;
   }
 
-  logger.info('Initializing clangd...');
+  // If initialization is in progress, wait for it
+  if (initializationPromise) {
+    return initializationPromise;
+  }
 
-  const config = detectConfiguration();
-  clangdManager = new ClangdManager(config);
-  await clangdManager.start();
+  // Start initialization with lock
+  initializationPromise = (async () => {
+    try {
+      logger.info('Initializing clangd...');
 
-  fileTracker = new FileTracker(clangdManager.getClient());
+      const config = detectConfiguration();
+      clangdManager = new ClangdManager(config);
+      await clangdManager.start();
 
-  logger.info('Clangd initialization complete');
+      fileTracker = new FileTracker(clangdManager.getClient());
+
+      logger.info('Clangd initialization complete');
+    } finally {
+      // Release lock after completion (success or failure)
+      initializationPromise = null;
+    }
+  })();
+
+  return initializationPromise;
 }
 
 /**
@@ -201,17 +273,20 @@ async function main() {
   // Handle tool calls
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
+      const { name, arguments: args } = request.params;
+
+      if (!args) {
+        throw new Error('Missing arguments for tool call');
+      }
+
+      // Validate arguments before initialization
+      validateToolArgs(name, args);
+
       // Initialize clangd on first tool call
       await ensureClangdInitialized();
 
       if (!clangdManager || !fileTracker) {
         throw new Error('Clangd not initialized');
-      }
-
-      const { name, arguments: args } = request.params;
-
-      if (!args) {
-        throw new Error('Missing arguments for tool call');
       }
 
       switch (name) {
@@ -310,28 +385,32 @@ async function main() {
     }
   });
 
-  // Graceful shutdown
-  process.on('SIGINT', async () => {
-    logger.info('Received SIGINT, shutting down...');
-    if (fileTracker) {
-      fileTracker.closeAll();
+  // Graceful shutdown handler
+  const shutdownHandler = async (signal: string) => {
+    if (isShuttingDown) {
+      logger.warn(`Received ${signal} again, forcing exit`);
+      process.exit(1);
     }
-    if (clangdManager) {
-      await clangdManager.shutdown();
-    }
-    process.exit(0);
-  });
 
-  process.on('SIGTERM', async () => {
-    logger.info('Received SIGTERM, shutting down...');
-    if (fileTracker) {
-      fileTracker.closeAll();
+    isShuttingDown = true;
+    logger.info(`Received ${signal}, shutting down...`);
+
+    try {
+      if (fileTracker) {
+        fileTracker.closeAll();
+      }
+      if (clangdManager) {
+        await clangdManager.shutdown();
+      }
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during shutdown:', error);
+      process.exit(1);
     }
-    if (clangdManager) {
-      await clangdManager.shutdown();
-    }
-    process.exit(0);
-  });
+  };
+
+  process.on('SIGINT', () => shutdownHandler('SIGINT'));
+  process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
 
   // Start server with stdio transport
   const transport = new StdioServerTransport();

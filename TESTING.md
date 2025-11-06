@@ -47,6 +47,29 @@ tests/
 
 ## Writing Tests
 
+**Example - Testing a new LSP tool:**
+```typescript
+// tests/unit/tools/my-tool.test.ts
+import { describe, it, expect, beforeEach } from '@jest/globals';
+import { MyTool } from '../../../src/tools/my-tool.js';
+import { createMockLSPClient } from '../../helpers/mock-lsp-responses.js';
+
+describe('MyTool', () => {
+  it('should handle successful LSP response', async () => {
+    // Arrange
+    const mockClient = createMockLSPClient();
+    const tool = new MyTool(mockClient);
+
+    // Act
+    const result = await tool.execute({file: 'test.cpp', line: 10});
+
+    // Assert
+    expect(result).toMatchObject({location: expect.any(String)});
+  });
+});
+```
+
+**Guidelines:**
 - Use descriptive test names: "should handle partial message buffers"
 - Follow AAA pattern: Arrange, Act, Assert
 - Test edge cases and error paths

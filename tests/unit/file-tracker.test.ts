@@ -32,6 +32,17 @@ describe('FileTracker', () => {
   });
 
   afterEach(() => {
+    // Close all tracked files
+    tracker.closeAll();
+
+    // Clean up LSPClient
+    client.close();
+
+    // Clean up mock streams
+    stdin.cleanup();
+    stdout.cleanup();
+
+    // Clean up test directory
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }

@@ -114,205 +114,76 @@ Configure the server behavior using environment variables:
 | `CLANGD_LOG_LEVEL` | Clangd's internal log level | `error` |
 | `LOG_LEVEL` | MCP server log level (ERROR, WARN, INFO, DEBUG) | `INFO` |
 
-### Example Configurations
+### Advanced Examples
 
-**Chromium project:**
 ```json
-{
-  "mcpServers": {
-    "clangd": {
-      "command": "clangd-mcp-server",
-      "env": {
-        "PROJECT_ROOT": "/home/user/chromium/src",
-        "COMPILE_COMMANDS_DIR": "/home/user/chromium/src/out/Default",
-        "LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
+// Chromium project
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
+  "PROJECT_ROOT": "/home/user/chromium/src",
+  "COMPILE_COMMANDS_DIR": "/home/user/chromium/src/out/Default"
+}}}}
 
-**Custom clangd with additional args:**
-```json
-{
-  "mcpServers": {
-    "clangd": {
-      "command": "clangd-mcp-server",
-      "env": {
-        "PROJECT_ROOT": "/path/to/project",
-        "CLANGD_PATH": "/opt/homebrew/opt/llvm/bin/clangd",
-        "CLANGD_ARGS": "--header-insertion=never --completion-style=detailed"
-      }
-    }
-  }
-}
+// Custom clangd binary with args
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
+  "CLANGD_PATH": "/opt/homebrew/opt/llvm/bin/clangd",
+  "CLANGD_ARGS": "--header-insertion=never --completion-style=detailed"
+}}}}
 ```
 
 ## Usage
 
-Once configured, Claude Code can use the following tools:
+Once configured, Claude Code can use these tools via natural language:
 
-### Find Definition
+| Tool | Purpose | Example Query |
+|------|---------|---------------|
+| `find_definition` | Jump to symbol definition | "Find the definition of the symbol at line 42, column 10 in src/foo.cpp" |
+| `find_references` | Find all references to symbol | "Find all references to the function in include/bar.h at line 100" |
+| `get_hover` | Get type info and docs | "What is the type of the variable at line 200 in src/baz.cpp?" |
+| `workspace_symbol_search` | Search symbols project-wide | "Find all symbols matching 'HttpRequest'" |
+| `find_implementations` | Find interface/virtual implementations | "Find implementations of the method at line 50 in interface.h" |
+| `get_document_symbols` | Get file's symbol hierarchy | "Show me all symbols in src/main.cpp" |
 
-```
-Find the definition of the symbol at line 42, column 10 in src/foo.cpp
-```
+**Note:** LSP uses 0-indexed line/column numbers. Claude handles the conversion automatically.
 
-Claude will call:
-```json
-{
-  "tool": "find_definition",
-  "arguments": {
-    "file_path": "/absolute/path/to/src/foo.cpp",
-    "line": 41,
-    "column": 10
-  }
-}
-```
-
-Note: Line and column numbers are 0-indexed in LSP.
-
-### Find References
-
-```
-Find all references to the function at line 100, column 5 in include/bar.h
-```
-
-### Get Hover Information
-
-```
-What is the type of the variable at line 200, column 15 in src/baz.cpp?
-```
-
-### Search Workspace Symbols
-
-```
-Find all symbols matching "HttpRequest"
-```
-
-### Find Implementations
-
-```
-Find implementations of the virtual method at line 50, column 8 in interface.h
-```
-
-### Get Document Symbols
-
-```
-Show me all symbols in src/main.cpp
-```
-
-## Performance Considerations
+## Performance
 
 ### Background Indexing (Disabled by Default)
 
-By default, this MCP server **disables background indexing** (`--background-index=false`) for all projects.
+Background indexing is **disabled** (`--background-index=false`) because MCP makes sporadic queries, not continuous edits. On-demand indexing saves GBs of memory while still indexing files as queried.
 
-**Why?** MCP servers make sporadic queries rather than continuous editing sessions. On-demand indexing (when files are opened via `didOpen`) is more efficient for this use case and:
-- Uses significantly less memory (GBs less on large codebases)
-- Reduces CPU usage (no continuous background indexing)
-- Provides faster startup
-- Still indexes files as they're queried
+**Tradeoffs:**
+- ✅ Lower memory/CPU, faster startup
+- ⚠️ `workspace_symbol_search` limited to already-opened files
+- ⚠️ First query per file: 5-15s (subsequent: 1-5s)
 
-**Implications:**
-- `workspace_symbol_search` only finds symbols in already-opened/indexed files
-- First query on a file may take longer (5-15s) while clangd parses it
-- Subsequent queries on the same file are fast (1-5s)
-
-**To enable background indexing** (if you want workspace-wide symbol search):
-
+**Enable for workspace-wide search** (costs: hours to index, high memory):
 ```json
-{
-  "mcpServers": {
-    "clangd": {
-      "command": "clangd-mcp-server",
-      "env": {
-        "PROJECT_ROOT": "/path/to/project",
-        "CLANGD_ARGS": "--background-index --limit-references=1000 --limit-results=1000"
-      }
-    }
-  }
-}
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
+  "CLANGD_ARGS": "--background-index --limit-references=1000 --limit-results=1000"
+}}}}
 ```
 
-Note: Background indexing can take hours on large codebases and use significant memory.
+**Chromium-scale projects:** Use [remote index server](https://clangd.llvm.org/design/remote-index) instead.
 
-### Chromium Projects
-
-For Chromium-scale projects, consider setting up a [remote index server](https://clangd.llvm.org/design/remote-index) for better performance with workspace-wide symbol search.
-
-### Expected Performance
-
-- **Warm files** (already indexed): 1-5 seconds
-- **Cold files** (first query): 5-15 seconds
-- **Startup time**: < 5 seconds for MCP server
-- **Memory**: < 500MB for MCP server (clangd uses significantly less without background indexing)
+**Typical performance:**
+- Warm files: 1-5s | Cold files: 5-15s | Startup: <5s | Memory: <500MB
 
 ## Troubleshooting
 
-### Clangd not found
+| Problem | Cause/Error | Solution |
+|---------|-------------|----------|
+| **Clangd not found** | `spawn clangd ENOENT` | Install clangd or set `CLANGD_PATH` env var |
+| **Missing compile_commands.json** | `compile_commands.json not found` | Generate it (see Configuration) with CMake/GN/Bear |
+| **Timeout** | `timed out after 30000ms` | File not in build, or clangd indexing (wait/retry), or check with `CLANGD_LOG_LEVEL=verbose` |
+| **Crashes** | `Max restart attempts reached` | Check clangd version, stderr logs, try different `CLANGD_ARGS`, validate compile_commands.json |
 
-```
-Error: Failed to start clangd: spawn clangd ENOENT
-```
-
-**Solution:** Install clangd or set `CLANGD_PATH` environment variable.
-
-### compile_commands.json not found
-
-```
-Warning: compile_commands.json not found - clangd may not work correctly
-```
-
-**Solution:** Generate `compile_commands.json` for your project (see Configuration section).
-
-### Queries timing out
-
-```
-Error: LSP request 'textDocument/definition' timed out after 30000ms
-```
-
-**Possible causes:**
-- File not in compile_commands.json
-- Clangd indexing in progress (wait and retry)
-- Large file with complex templates
-
-**Solutions:**
-- Increase timeout in code (not currently configurable)
-- Ensure file is in your build
-- Check clangd logs with `CLANGD_LOG_LEVEL=verbose`
-
-### Clangd crashes repeatedly
-
-```
-Error: Max restart attempts reached, giving up
-```
-
-**Solutions:**
-- Check clangd version compatibility
-- Look at clangd stderr output in logs
-- Try different clangd arguments via `CLANGD_ARGS`
-- Ensure compile_commands.json is valid JSON
-
-### Verbose logging
-
-For detailed debugging:
-
+**Enable verbose logging:**
 ```json
-{
-  "mcpServers": {
-    "clangd": {
-      "command": "clangd-mcp-server",
-      "env": {
-        "LOG_LEVEL": "DEBUG",
-        "CLANGD_LOG_LEVEL": "verbose"
-      }
-    }
-  }
-}
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
+  "LOG_LEVEL": "DEBUG", "CLANGD_LOG_LEVEL": "verbose"
+}}}}
 ```
-
-Check stderr output (usually in Claude Code logs).
+Check stderr in Claude Code logs.
 
 ## Architecture
 

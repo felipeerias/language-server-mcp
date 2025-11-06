@@ -33,12 +33,20 @@ export async function withTimeout<T>(
   timeoutMs: number,
   timeoutMessage: string = 'Operation timed out'
 ): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new TimeoutError(timeoutMessage)), timeoutMs)
-    )
-  ]);
+  let timeoutHandle: NodeJS.Timeout | undefined;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(new TimeoutError(timeoutMessage)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    // Always clear the timeout, whether promise resolved or rejected
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 /**

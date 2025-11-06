@@ -6,19 +6,7 @@ import { LSPClient } from '../lsp-client.js';
 import { FileTracker } from '../file-tracker.js';
 import { uriToPath } from '../utils/uri.js';
 import { withRetry } from '../utils/errors.js';
-
-interface Position {
-  line: number;
-  character: number;
-}
-
-interface Location {
-  uri: string;
-  range: {
-    start: Position;
-    end: Position;
-  };
-}
+import { Location } from '../utils/lsp-types.js';
 
 export async function findReferences(
   lspClient: LSPClient,

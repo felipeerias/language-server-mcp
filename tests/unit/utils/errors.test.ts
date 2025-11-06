@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import {
   TimeoutError,
   ClangdError,
@@ -12,8 +12,10 @@ import {
 } from '../../../src/utils/errors.js';
 
 describe('Error utilities', () => {
-  beforeEach(() => {
+  afterEach(() => {
+    // Clean up any pending timers
     jest.clearAllTimers();
+    jest.useRealTimers();
   });
 
   describe('Custom error classes', () => {
@@ -54,12 +56,12 @@ describe('Error utilities', () => {
     });
 
     it('should reject with TimeoutError if promise exceeds timeout', async () => {
-      const promise = new Promise((resolve) => setTimeout(resolve, 2000));
+      const promise = new Promise((resolve) => setTimeout(resolve, 200));
       await expect(
-        withTimeout(promise, 100, 'Custom timeout message')
+        withTimeout(promise, 50, 'Custom timeout message')
       ).rejects.toThrow(TimeoutError);
       await expect(
-        withTimeout(promise, 100, 'Custom timeout message')
+        withTimeout(new Promise((resolve) => setTimeout(resolve, 200)), 50, 'Custom timeout message')
       ).rejects.toThrow('Custom timeout message');
     });
 
@@ -71,8 +73,8 @@ describe('Error utilities', () => {
     });
 
     it('should use default timeout message if not provided', async () => {
-      const promise = new Promise((resolve) => setTimeout(resolve, 2000));
-      await expect(withTimeout(promise, 100)).rejects.toThrow('Operation timed out');
+      const promise = new Promise((resolve) => setTimeout(resolve, 200));
+      await expect(withTimeout(promise, 50)).rejects.toThrow('Operation timed out');
     });
   });
 
@@ -152,13 +154,13 @@ describe('Error utilities', () => {
       const start = Date.now();
       await withRetry(fn, {
         maxAttempts: 3,
-        initialDelayMs: 50,
+        initialDelayMs: 10,
         maxDelayMs: 1000,
       });
       const duration = Date.now() - start;
 
-      // Should wait ~50ms + ~100ms = ~150ms
-      expect(duration).toBeGreaterThanOrEqual(130);
+      // Should wait ~10ms + ~20ms = ~30ms (allow for timing variance)
+      expect(duration).toBeGreaterThanOrEqual(25);
       expect(fn).toHaveBeenCalledTimes(3);
     });
 
@@ -171,8 +173,8 @@ describe('Error utilities', () => {
 
       await withRetry(fn, {
         maxAttempts: 3,
-        initialDelayMs: 100,
-        maxDelayMs: 150,
+        initialDelayMs: 10,
+        maxDelayMs: 15,
       });
 
       expect(fn).toHaveBeenCalledTimes(3);

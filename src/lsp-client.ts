@@ -43,6 +43,10 @@ export class LSPClient {
   private pendingRequests: Map<number | string, PendingRequest> = new Map();
   private buffer: string = '';
   private notificationHandlers: Map<string, (params: any) => void> = new Map();
+  private readonly maxMessageSize: number = 100 * 1024 * 1024; // 100 MB limit
+  private dataHandler?: (chunk: Buffer) => void;
+  private errorHandler?: (error: Error) => void;
+  private endHandler?: () => void;
 
   constructor(stdin: Writable, stdout: Readable) {
     this.stdin = stdin;
@@ -51,23 +55,27 @@ export class LSPClient {
   }
 
   private setupStreamHandlers(): void {
-    this.stdout.on('data', (chunk: Buffer) => {
+    this.dataHandler = (chunk: Buffer) => {
       this.buffer += chunk.toString('utf-8');
       this.processBuffer();
-    });
+    };
 
-    this.stdout.on('error', (error) => {
+    this.errorHandler = (error: Error) => {
       logger.error('LSP stdout error:', error);
-    });
+    };
 
-    this.stdout.on('end', () => {
+    this.endHandler = () => {
       logger.info('LSP stdout ended');
       // Reject all pending requests
       for (const [id, pending] of this.pendingRequests.entries()) {
         pending.reject(new Error('LSP connection closed'));
       }
       this.pendingRequests.clear();
-    });
+    };
+
+    this.stdout.on('data', this.dataHandler);
+    this.stdout.on('error', this.errorHandler);
+    this.stdout.on('end', this.endHandler);
   }
 
   private processBuffer(): void {
@@ -79,6 +87,26 @@ export class LSPClient {
       }
 
       const contentLength = parseInt(headerMatch[1], 10);
+
+      // Check for malformed or malicious message size
+      if (contentLength > this.maxMessageSize) {
+        logger.error(`Message size ${contentLength} exceeds maximum ${this.maxMessageSize}, dropping connection`);
+        this.close();
+        return;
+      }
+
+      if (contentLength < 0 || !Number.isFinite(contentLength)) {
+        logger.error(`Invalid Content-Length: ${contentLength}, skipping message`);
+        // Skip to next potential message by removing the malformed header
+        const headerEnd = this.buffer.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          this.buffer = this.buffer.substring(headerEnd + 4);
+        } else {
+          this.buffer = '';
+        }
+        continue;
+      }
+
       const headerEnd = this.buffer.indexOf('\r\n\r\n');
 
       if (headerEnd === -1) {
@@ -203,13 +231,36 @@ export class LSPClient {
     const fullMessage = header + content;
 
     logger.debug('Sending LSP message:', message);
-    this.stdin.write(fullMessage);
+
+    // Handle backpressure: if write returns false, wait for drain
+    const canWrite = this.stdin.write(fullMessage);
+    if (!canWrite) {
+      logger.warn('LSP stdin buffer full, backpressure detected');
+      // In future, could queue messages or apply backpressure to callers
+      // For now, just log the warning as the stream will handle buffering
+    }
+  }
+
+  /**
+   * Remove event listeners from stdout stream
+   */
+  private cleanup(): void {
+    if (this.dataHandler) {
+      this.stdout.off('data', this.dataHandler);
+    }
+    if (this.errorHandler) {
+      this.stdout.off('error', this.errorHandler);
+    }
+    if (this.endHandler) {
+      this.stdout.off('end', this.endHandler);
+    }
   }
 
   /**
    * Close the LSP client
    */
   close(): void {
+    this.cleanup();
     this.stdin.end();
   }
 }
