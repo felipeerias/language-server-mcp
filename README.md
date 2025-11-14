@@ -1,57 +1,39 @@
 # Clangd MCP Server
 
-[Model Context Protocol](https://modelcontextprotocol.io) server that bridges Claude Code with clangd for C++ code intelligence on large codebases.
+[Model Context Protocol](https://modelcontextprotocol.io) server for clangd on large C++ codebases.
 
-## Features
+This MCP provides coding agents like Claude Code with a collection of tools that they may use to answer natural language queries from the user:
 
-**9 Code Intelligence Tools:**
-- `find_definition` - Jump to symbol definitions
-- `find_references` - Find all references to a symbol
-- `get_hover` - Get type information and documentation
-- `workspace_symbol_search` - Search symbols across workspace
-- `find_implementations` - Find interface/virtual method implementations
-- `get_document_symbols` - Get hierarchical symbol tree for a file
-- `get_diagnostics` - Get compiler errors, warnings, and notes
-- `get_call_hierarchy` - Get function callers and callees
-- `get_type_hierarchy` - Get base classes and derived classes
-
-**Architecture:**
-- Long-lived clangd with crash recovery and lazy initialization
-- Proper LSP lifecycle management (didOpen/didClose)
-- Timeout/retry with exponential backoff
-- Chromium-scale ready
+- `find_definition`: Jump to symbol definitions
+  - _"Find the definition at src/foo.cpp:42:10"_
+- `find_references`: Find all references to a symbol
+  - _"Find all references to the function at bar.h:100"_
+- `get_hover`: Get type information and documentation
+  - _"What's the type at baz.cpp:200:15?"_
+- `workspace_symbol_search`: Search symbols across workspace
+  - _"Find symbols matching 'HttpRequest'"_
+- `find_implementations`: Find interface/virtual method implementations
+  - _"Find implementations of interface.h:50"_
+- `get_document_symbols`: Get hierarchical symbol tree for a file
+  - _"Show all symbols in main.cpp"_
+- `get_diagnostics`: Get compiler errors, warnings, and notes
+  - _"Show errors in src/foo.cpp"_
+- `get_call_hierarchy`: Get function callers and callees
+  - _"Show callers/callees at main.cpp:100:5"_
+- `get_type_hierarchy`: Get base classes and derived classes
+  - _"Show base/derived classes at foo.h:42"_
 
 ## Requirements
 
 - Node.js >= 18.0.0
-- clangd (install via your package manager or LLVM)
+- clangd
 - A C++ project with `compile_commands.json`
-
-### Installing clangd
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install clangd
-```
-
-**macOS:**
-```bash
-brew install llvm
-# clangd will be at /opt/homebrew/opt/llvm/bin/clangd
-```
-
-**From LLVM releases:**
-Download from https://github.com/clangd/clangd/releases
-
-**Large projects with bundled clangd:**
-- **Chromium**: Auto-detected at `third_party/llvm-build/Release+Asserts/bin/clangd`
-- **Other projects**: Set `CLANGD_PATH` to specify bundled clangd
 
 ## Installation
 
 ```bash
-# From npm (when published)
-npm install -g clangd-mcp-server
+# From npm (eventually!)
+# npm install -g clangd-mcp-server
 
 # From source
 git clone https://github.com/felipeerias/clangd-mcp-server.git
@@ -64,8 +46,10 @@ npm install && npm run build && npm link
 ### Generating compile_commands.json
 
 **CMake:** `cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON /path/to/source`
+
 **GN (Chromium):** `gn gen out/Default`
-**Other:** Use [Bear](https://github.com/rizsotto/Bear)
+
+**Other:** Check your project's documentation.
 
 ### Claude Code Configuration
 
@@ -113,9 +97,29 @@ This project uses the clangd MCP server for C++ code intelligence. Use these too
 
 **Clangd auto-detection order:** `CLANGD_PATH` → project bundled (Chromium: `third_party/llvm-build/.../clangd`) → system PATH
 
-**Examples:**
+Some large projects bundle their own clangd.
+
+**Chromium** is auto-detected at `third_party/llvm-build/Release+Asserts/bin/clangd`. 
+
+For other projects in a similar situation, set `CLANGD_PATH` to specify the bundled clangd.
+
+For bettern performance, background indexing is disabled by default. Usually there is already an axisting `clangd` server taking care of indexing the codebase. You can enable it with:
 
 ```json
+{"env": {"CLANGD_ARGS": "--background-index --limit-results=1000"}}
+```
+
+Large projects might consider using [remote index](https://clangd.llvm.org/design/remote-index).
+
+Verbose logging may be enabled with:
+
+```json
+{"env": {"LOG_LEVEL": "DEBUG", "CLANGD_LOG_LEVEL": "verbose"}}
+```
+
+**Examples:**
+
+```js
 // Chromium (auto-detects bundled clangd)
 {"mcpServers": {"clangd": {"command": "clangd-mcp-server",
   "env": {"PROJECT_ROOT": "/home/user/chromium/src"},
@@ -130,56 +134,6 @@ This project uses the clangd MCP server for C++ code intelligence. Use these too
 {"mcpServers": {"clangd": {"command": "clangd-mcp-server",
   "env": {"CLANGD_ARGS": "--background-index --limit-results=1000"},
   "alwaysAllow": ["*"]}}}
-```
-
-## Usage
-
-Claude Code uses these tools via natural language:
-
-| Tool | Example Query |
-|------|---------------|
-| `find_definition` | "Find the definition at src/foo.cpp:42:10" |
-| `find_references` | "Find all references to the function at bar.h:100" |
-| `get_hover` | "What's the type at baz.cpp:200:15?" |
-| `workspace_symbol_search` | "Find symbols matching 'HttpRequest'" |
-| `find_implementations` | "Find implementations of interface.h:50" |
-| `get_document_symbols` | "Show all symbols in main.cpp" |
-| `get_diagnostics` | "Show errors in src/foo.cpp" |
-| `get_call_hierarchy` | "Show callers/callees at main.cpp:100:5" |
-| `get_type_hierarchy` | "Show base/derived classes at foo.h:42" |
-
-**Note:** LSP uses 0-indexed line/column. Claude handles conversion automatically.
-
-## Performance
-
-**Background indexing disabled by default** for lower memory usage and faster startup. Files indexed on-demand when first accessed.
-
-**Tradeoffs:**
-- Lower memory/CPU usage, faster startup
-- `workspace_symbol_search` limited to opened files
-- First query on a file will be slower as clangd indexes it on-demand; subsequent queries on the same file are faster
-
-**Note:** Performance varies significantly based on codebase size and complexity. Large codebases with extensive header dependencies (like Chromium) will require more memory and longer indexing times.
-
-**Enable for workspace-wide search** (costs GBs RAM, hours indexing):
-```json
-{"env": {"CLANGD_ARGS": "--background-index --limit-results=1000"}}
-```
-
-**Chromium-scale:** Use [remote index](https://clangd.llvm.org/design/remote-index) instead.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `spawn clangd ENOENT` | Install clangd or set `CLANGD_PATH` |
-| `compile_commands.json not found` | Generate with CMake/GN/Bear (see Configuration) |
-| `timed out after 30000ms` | File not in build, or clangd indexing; wait/retry or check logs |
-| `Max restart attempts reached` | Check clangd version/stderr, validate compile_commands.json |
-
-**Enable verbose logging:**
-```json
-{"env": {"LOG_LEVEL": "DEBUG", "CLANGD_LOG_LEVEL": "verbose"}}
 ```
 
 ## Architecture
@@ -205,12 +159,6 @@ npm run watch      # Watch mode
 npm test           # Run tests
 node dist/index.js # Test locally
 ```
-
-## Known Limitations
-
-- No file watching (changes need manual refresh)
-- Single clangd instance per project root
-- Doesn't bundle clangd binary
 
 ## License
 
